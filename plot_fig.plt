@@ -14,15 +14,15 @@ set label 'Yi-Fang Chen' at 12,8
 #set terminal x11
 filename(m,n) = sprintf("C%dU%d.txt",m,n)
 
-do for [c=1:19:2] {  
+do for [c=1:19:1] {  
 set title sprintf("P-persistent Simulation with Channel=%d",c)
    set terminal pngcairo
    outfile = sprintf('test%03.0f.png',c)
    set output outfile
 
 print "plot".c
-#do for [i=1:19:2] {print filename(c,i)}
-plot for [i=1:19:2] filename(c,i) using 3:4 w lp t sprintf("user=%d",i)
+#do for [i=1:19:4] {print filename(c,i)}
+plot for [i=1:19:4] filename(c,i) using 3:4 w lp t sprintf("user=%d",i)
 
 
 }

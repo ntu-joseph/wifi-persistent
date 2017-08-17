@@ -9,27 +9,32 @@
 #include <stdlib.h>
 #include <time.h>
 #include <math.h>
-#define MAX_N_CHANNEL 20
+#define MAX_N_CHANNEL 1
 #define MAX_N_user 30
 #define MAX_N_Round 100
 #define BW 1  
+
+#define max(a,b) (((a)>(b))?(a):(b)) 
+#define min(a,b) (((a)<(b))?(a):(b))  
+#define BE 3  
+
 enum {FALSE=0,TRUE=1};
 int N_user=1;
 int N_CHANNEL=1;
 float prob; 
 float payload_size=1.0;
 enum e_channel_state{IDLE=0,BUSY=1,DIRTY=2};
-enum e_user_state{WAIT=0,TX=1,BACKOFF=2,COMPLETE=3};
+enum e_user_state{WAIT=0,TX=1,BACKOFF=2,COMPLETE=3,COLLISION=4};
 int n_complete=0;
 char *str_Cstate[]={"Idle","Busy","Dirty"};
-char *str_Ustate[]={"Wait","TX","BACKOFF","Complete"};
+char *str_Ustate[]={"Wait","TX","BACKOFF","Complete","Collision"};
 
 
 FILE *fp;  //record 
 FILE *fp2;  //record 
 #define WRITE_FILE 1
 
-#define DEBUG 0
+#define DEBUG 1
 
 #define dbg_printf(fmt, ...)\
             do { if (DEBUG) fprintf(stderr, fmt, __VA_ARGS__);\
@@ -47,6 +52,20 @@ typedef struct {
 }Channel;
 
 
+typedef struct  {
+	
+  int ifs;  
+  int cw_min;  
+  int cw_max;  
+  int var_ifs;
+  int be; //backoff exponent
+  int nb; //the number of backoff
+  int cw; //backoff period (//contention window)	
+		
+	
+} CSMA; 
+
+
 typedef struct {
   
    int id;  
@@ -57,8 +76,12 @@ typedef struct {
    char collision;
    int num_collision;
    enum e_user_state user_state; 
+   CSMA csma_para;
                
 }User;
+
+
+
 
 //Function list ---------
 void init_channel(Channel *c);
@@ -69,6 +92,10 @@ void show_channel_state(Channel *c);
 void show_user_state(User *user,int flag_more);
 void show_user_report(User *user);
 int p();
+// CSMA ---
+
+void reset_csma(User *user);
+void do_backoff(User *user);
 //-------------------------
 int main()
 {
@@ -77,8 +104,8 @@ int main()
     User user[MAX_N_user]; 
    // payload size determintes that how many time slots are required to transfer
    // payload size is proportinal to the number of channels 
-    char filename[64]="result.txt"; //overall
-	char filename2[64]="plot.txt"; //for plot
+    char filename[64]="result-wifi.txt"; //overall
+	char filename2[64]="plot-wifi.txt"; //for plot
     unsigned long t;
     srand((unsigned) time(NULL));
     init_channel(ch);
@@ -113,14 +140,11 @@ int main()
 				#endif 
 				 
 				
-				for(prob=0.1f;prob<0.91f;prob+=0.1f) {
+			//	for(prob=0.1f;prob<0.91f;prob+=0.1f) {
             	dbg_printf("prob=%6.2f==>\n",prob);
 					  
 					total_T=0;
 					
-
-					
-						printf("111\n");
 					
 					for (N_round=1;N_round<=MAX_N_Round;N_round++) {
 						 dbg_printf("N_Round=%d==>\n",N_round);
@@ -134,18 +158,21 @@ int main()
 						/*************************************************************************************/ 
 						//at first, randomly select a channel for each user
 						for (j=0;j<N_user;j++)  {
-							user[j].curr_ch=select_channel();
+							//user[j].curr_ch=select_channel();
+							user[j].curr_ch=0; //fixed channel 0
 							dbg_printf("%d %s\n",user[j].curr_ch,str_Ustate[user[j].user_state] );
 						}
 						
 						update_channel_state(ch,user);
 						// start to simulation
-						for (t=0;t<100000;t++) 
+					for (t=0;t<100000;t++) 
+				      
 						{  
 						   dbg_printf("t=%d==>\n",t);
 							  
 						   //user select channel randomly
-						   for (j=0;j<N_user;j++)  {            
+						   for (j=0;j<N_user;j++)  {          
+                              //  printf("~~~j=%d,ch=%d\n",j,user[j].curr_ch);  
 							
 								if (user[j].curr_ch==-1) continue;
 							 
@@ -154,7 +181,14 @@ int main()
 									case WAIT:
 									
 										if(ch[user[j].curr_ch].state==IDLE) {
-											if (p()) user[j].user_state=TX;   //toss a coin to determine whether or not to enter  
+											
+											if (user[j].csma_para.var_ifs++==user[j].csma_para.ifs) {
+											   user[j].csma_para.var_ifs=0;
+											   user[j].user_state=BACKOFF;
+											   do_backoff(&user[j]);
+										    } 
+											
+											
 															
 										} 				
 									
@@ -164,31 +198,46 @@ int main()
 										//20170730
 										//user[j].data_size--;
 										user[j].data_size-=((float)1/(N_CHANNEL));
+									
 										
 										if (user[j].data_size<=0.001f) {
-											user[j].user_state=(user[j].collision==TRUE)?(user[j].num_collision++,BACKOFF):COMPLETE;
+											user[j].user_state=(user[j].collision==TRUE)?(user[j].num_collision++,COLLISION):COMPLETE;
 											
 										   }
-										/*	
-										if (user[j].user_state==COMPLETE){  
-										   user[j].curr_ch=-1; //exit
-										   user[j].complete_time=t;
-										   n_complete++;
-										   }
-									 */
-													
+										
+										if (user[j].user_state==COLLISION) {
+											user[j].data_size=payload_size;
+											user[j].user_state=WAIT;  //Retry again
+											user[j].collision=FALSE; //clear collision situation
+										}
+										   
+																			
 										break;
-									case BACKOFF:
-										 user[j].data_size=payload_size;
-										 user[j].user_state=WAIT;
-										 user[j].collision=FALSE; //clear collision state
+									case BACKOFF: 
+                                         //in backoff period										
+									
+										 user[j].collision=FALSE; //clear collision situation
+										 //  user[j].csma_para.cw--;
+										    if (ch[0].state==IDLE) user[j].csma_para.cw--;
+										 
+										 if(user[j].csma_para.cw<=0) {
+											  user[j].user_state=TX;
+											  reset_csma(&user[j]);											  
+                                         }		  
+                                         
+                                      //   if (ch[0].state==IDLE) user[j].csma_para.cw--;
+                                       
+										 
 										break;
 								
 									case COMPLETE:
-										user[j].complete_ch=user[j].curr_ch;
+										user[j].complete_ch=0;
 										user[j].curr_ch=-1; //exit
 										user[j].complete_time=t-1;
 										n_complete++;
+										user[j].csma_para.nb=0;  //the number of backoff
+	                                    user[j].csma_para.be=BE;  
+                                        reset_csma(&user[j]);
 										break;
 								
 							   }
@@ -232,8 +281,7 @@ int main()
 
 					}
                     
-                    /*-----For differecnt # of channel , measure X:probability, Y:throughput, line: different user---------------*/	
-                    		
+                 #if 0   			
                     { //write for the different of channels
 					char wbuf2[128];
 				
@@ -246,26 +294,10 @@ int main()
 
 			        }	
                     
-                    
-                    /*------For one channel , measure X:number of user, Y:throughput, line: different probability---------------*/	
-                    /*		
-                    { 
-					char wbuf2[128];
-				
-			        #if WRITE_FILE==1   
-						#define PRINT_FMT2 "%d\t%d\t%4.2f\t%6.3lf\n" 
-			            sprintf(wbuf2,PRINT_FMT2,N_CHANNEL,N_user,prob,total_T/MAX_N_Round);   
-				 	    fprintf(fp2,"%s",wbuf2);
-					   
-					#endif
-
-			        }	
-                    */
-                    
-                    
+                  #endif  
                     
                     					
-				} // test probability from 0.1~1
+				//} // test probability from 0.1~1
 				
 							
 			 #if WRITE_FILE==1 
@@ -352,8 +384,8 @@ void show_user_state(User *user,int flag_more)
   int i;
   for (i=0;i<N_user;i++){ 
      if (!flag_more & user[i].curr_ch==-1) continue;
-         dbg_printf("user %d,ch=%d,state=%s,data=%4.2f,n_collision=%d\n",
-         i,user[i].curr_ch,str_Ustate[user[i].user_state],user[i].data_size,user[i].num_collision);
+         dbg_printf("user %d,ch=%d,state=%s,data=%4.2f,n_collision=%d,cw=%d,be=%d,difs=%d\n",
+         i,user[i].curr_ch,str_Ustate[user[i].user_state],user[i].data_size,user[i].num_collision,user[i].csma_para.cw,user[i].csma_para.be,user[i].csma_para.var_ifs);
     }
 
 }
@@ -397,6 +429,10 @@ void init_user(User *user)
 	 user[i].complete_ch=-1;
 	 user[i].complete_time=100000; //will update
 	 user[i].num_collision=0;
+	 //init csma parameter
+	 user[i].csma_para.nb=0;  //the number of backoff
+	 user[i].csma_para.be=BE;  
+	 reset_csma(&user[i]);
    }
 
 }
@@ -423,7 +459,39 @@ int p()
 
 
 
+void do_backoff(User *user)
+{
+   int mod;
+     
+  
+    
+   mod =(int)pow(2,user->csma_para.be);  
+  
+   user->csma_para.cw=rand()%mod;  //get 0~(2^be-1)
+
+   user->csma_para.cw=max(user->csma_para.cw_min,user->csma_para.cw); //min cw is cwmin	
+   user->csma_para.cw=min(user->csma_para.cw_max,user->csma_para.cw); //max cw is cwmax
+   
+   user->csma_para.nb++;
+   user->csma_para.be++; 
+   dbg_printf("%s:UID=%d,AIFS=%d,BE=%d,NB=%d,cw=%d,state=%s\n",__func__,user->id,user->csma_para.ifs, user->csma_para.be, user->csma_para.nb, user->csma_para.cw,"Backoff") ;           
+   
+  
+}
 
 
 
+void reset_csma(User *user)
+{
+   //reset to constant value  
+     user->csma_para.ifs=2; //means DIFS=csma_para.ifs+1
+	 user->csma_para.var_ifs=0;
+     user->csma_para.cw_min=0;
+	 user->csma_para.cw_max=1024;
+     user->csma_para.cw=0;
+    // user->csma_para.be=BE; //reset only tx complete
+    
+              
+     
+}
 
